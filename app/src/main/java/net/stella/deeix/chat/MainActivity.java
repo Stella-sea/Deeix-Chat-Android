@@ -255,11 +255,15 @@ public final class MainActivity extends Activity {
                     + "function deeixSchedule(){"
                     + "if(deeixTimer)clearTimeout(deeixTimer);"
                     + "deeixTimer=setTimeout(function(){deeixTimer=null;deeixReport();},250);}"
+                    + "try{var deeixMql=window.matchMedia('(prefers-color-scheme: dark)');"
+                    + "if(deeixMql&&deeixMql.addEventListener)"
+                    + "deeixMql.addEventListener('change',deeixSchedule);}catch(e){}"
                     + "deeixSchedule();"
+                    + "setTimeout(deeixSchedule,1500);"
+                    + "setTimeout(deeixSchedule,4000);"
                     + "new MutationObserver(deeixSchedule)"
                     + ".observe(document.documentElement,"
-                    + "{subtree:true,childList:true,attributes:true,"
-                    + "attributeFilter:['class','style','content']});"
+                    + "{subtree:true,childList:true,attributes:true});"
                     + "})();";
 
     private final class ThemeBridge {
