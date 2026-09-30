@@ -18,7 +18,6 @@ import android.os.Environment;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.window.OnBackInvokedCallback;
@@ -66,8 +65,6 @@ public final class MainActivity extends Activity {
     private TextView errorMessage;
     private Button errorRetry;
     private LinearLayout errorPanel;
-    private View topInsetScrim;
-    private int topInset;
     private int chromeColor = DARK_BLUE;
     private float touchStartX;
     private float touchStartY;
@@ -140,69 +137,34 @@ public final class MainActivity extends Activity {
     }
 
     private void configureWindow() {
-        getWindow().setStatusBarColor(Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        // No edge-to-edge overlay: the WebView lays out below the status bar so the
+        // page's own (possibly fixed-position) header stays fully visible. The status
+        // and navigation bars themselves are tinted with the page's theme-color, which
+        // keeps the chrome color filling all the way to the screen edges.
+        getWindow().setStatusBarColor(chromeColor);
+        getWindow().setNavigationBarColor(chromeColor);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             getWindow().setStatusBarContrastEnforced(false);
             getWindow().setNavigationBarContrastEnforced(false);
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            getWindow().setDecorFitsSystemWindows(false);
-        } else {
-            getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+            getWindow().setDecorFitsSystemWindows(true);
         }
     }
 
     private void createRoot() {
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK_BLUE);
-        root.setOnApplyWindowInsetsListener((view, insets) -> {
-            int left;
-            int top;
-            int right;
-            int bottom;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                android.graphics.Insets bars = insets.getInsets(
-                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                android.graphics.Insets keyboard = insets.getInsets(WindowInsets.Type.ime());
-                left = bars.left;
-                top = bars.top;
-                right = bars.right;
-                bottom = Math.max(bars.bottom, keyboard.bottom);
-            } else {
-                left = insets.getSystemWindowInsetLeft();
-                top = insets.getSystemWindowInsetTop();
-                right = insets.getSystemWindowInsetRight();
-                bottom = insets.getSystemWindowInsetBottom();
-            }
-            topInset = top;
-            view.setPadding(left, 0, right, bottom);
-            if (topInsetScrim != null) {
-                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) topInsetScrim.getLayoutParams();
-                params.height = top;
-                topInsetScrim.setLayoutParams(params);
-            }
-            if (progressBar != null) {
-                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) progressBar.getLayoutParams();
-                params.topMargin = top;
-                progressBar.setLayoutParams(params);
-            }
-            if (webView != null) {
-                webView.setPadding(0, top, 0, 0);
-            }
-            return insets;
-        });
+        // With setDecorFitsSystemWindows(true) the system insets the content view
+        // below the status bar / above the navigation bar, so no manual padding
+        // or overlay scrim is needed here.
         setContentView(root);
     }
 
     private void installWebView() {
         webView = new WebView(this);
         webView.setBackgroundColor(DARK_BLUE);
-        webView.setPadding(0, topInset, 0, 0);
         root.addView(webView, 0, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
@@ -220,15 +182,6 @@ public final class MainActivity extends Activity {
         FrameLayout.LayoutParams progressParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP);
         root.addView(progressBar, progressParams);
-
-        topInsetScrim = new View(this);
-        // Solid fill; the actual color tracks the page's theme-color (see ThemeBridge).
-        topInsetScrim.setBackgroundColor(chromeColor);
-        FrameLayout.LayoutParams scrimParams = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, 0, Gravity.TOP);
-        root.addView(topInsetScrim, scrimParams);
-
-        // The status bar consumes touch events, so keep this visual layer passive.
 
         errorPanel = new LinearLayout(this);
         errorPanel.setOrientation(LinearLayout.VERTICAL);
@@ -262,7 +215,7 @@ public final class MainActivity extends Activity {
 
     /**
      * Reports the page's {@code <meta name="theme-color">} to native code and keeps
-     * watching it, so the status-bar scrim follows the web theme even when the user
+     * watching it, so the system bars follow the web theme even when the user
      * switches themes inside the page without a reload.
      */
     private static final String THEME_OBSERVER_JS =
@@ -299,8 +252,8 @@ public final class MainActivity extends Activity {
         int color = parseCssColor(spec, DARK_BLUE);
         if (color == chromeColor) return;
         chromeColor = color;
-        topInsetScrim.setBackgroundColor(color);
-        root.setBackgroundColor(color);
+        getWindow().setStatusBarColor(color);
+        getWindow().setNavigationBarColor(color);
         webView.setBackgroundColor(color);
         setLightStatusBar(isLightColor(color));
     }
@@ -342,15 +295,21 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
-                controller.setSystemBarsAppearance(
-                        light ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0,
-                        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+                int bars = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(light ? bars : 0, bars);
             }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        } else {
             View decor = getWindow().getDecorView();
             int flags = decor.getSystemUiVisibility();
-            if (light) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (light) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (light) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
             decor.setSystemUiVisibility(flags);
         }
     }
