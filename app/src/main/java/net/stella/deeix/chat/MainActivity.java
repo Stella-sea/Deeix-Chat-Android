@@ -137,10 +137,12 @@ public final class MainActivity extends Activity {
     }
 
     private void configureWindow() {
-        // No edge-to-edge overlay: the WebView lays out below the status bar so the
-        // page's own (possibly fixed-position) header stays fully visible. The status
-        // and navigation bars themselves are tinted with the page's theme-color, which
-        // keeps the chrome color filling all the way to the screen edges.
+        // No edge-to-edge overlay and no decorFitsSystemWindows: we inset the
+        // WebView ourselves with margins (see installWebView), so the behavior
+        // is deterministic on every device. The WebView's viewport starts below
+        // the status bar, which keeps the page's own (possibly fixed-position)
+        // header fully visible, while the root's background fills the system
+        // bar areas with the page's theme-color all the way to the edges.
         getWindow().setStatusBarColor(chromeColor);
         getWindow().setNavigationBarColor(chromeColor);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -148,26 +150,40 @@ public final class MainActivity extends Activity {
             getWindow().setStatusBarContrastEnforced(false);
             getWindow().setNavigationBarContrastEnforced(false);
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            getWindow().setDecorFitsSystemWindows(true);
-        }
     }
 
     private void createRoot() {
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK_BLUE);
-        // With setDecorFitsSystemWindows(true) the system insets the content view
-        // below the status bar / above the navigation bar, so no manual padding
-        // or overlay scrim is needed here.
         setContentView(root);
     }
 
     private void installWebView() {
         webView = new WebView(this);
         webView.setBackgroundColor(DARK_BLUE);
-        root.addView(webView, 0, new FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams webParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT));
+                FrameLayout.LayoutParams.MATCH_PARENT);
+        root.addView(webView, 0, webParams);
+        // Inset with margins (not padding): the viewport itself starts below the
+        // status bar, so position:fixed page headers render fully visible instead
+        // of sliding under the system bars. The root background behind the margins
+        // keeps the chrome color filling the screen edges.
+        webView.setOnApplyWindowInsetsListener((v, insets) -> {
+            int top = insets.getSystemWindowInsetTop();
+            int bottom = insets.getSystemWindowInsetBottom();
+            int left = insets.getSystemWindowInsetLeft();
+            int right = insets.getSystemWindowInsetRight();
+            if (webParams.topMargin != top || webParams.bottomMargin != bottom
+                    || webParams.leftMargin != left || webParams.rightMargin != right) {
+                webParams.topMargin = top;
+                webParams.bottomMargin = bottom;
+                webParams.leftMargin = left;
+                webParams.rightMargin = right;
+                v.setLayoutParams(webParams);
+            }
+            return insets;
+        });
         configureWebView();
     }
 
@@ -254,6 +270,7 @@ public final class MainActivity extends Activity {
         chromeColor = color;
         getWindow().setStatusBarColor(color);
         getWindow().setNavigationBarColor(color);
+        root.setBackgroundColor(color);
         webView.setBackgroundColor(color);
         setLightStatusBar(isLightColor(color));
     }
