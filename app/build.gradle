@@ -2,6 +2,13 @@ plugins {
     id 'com.android.application'
 }
 
+// release-config.json is the single source of truth for the website. The deep
+// link host in the manifest and the default URL baked into the app are derived
+// from it so the three can never drift apart again.
+def releaseConfig = new groovy.json.JsonSlurper().parse(file('../release-config.json'))
+def websiteUrl = releaseConfig.website as String
+def deepLinkHost = new URI(websiteUrl).getHost()
+
 android {
     namespace 'net.stella.deeix.chat'
     compileSdk 35
@@ -12,6 +19,8 @@ android {
         targetSdk 35
         versionCode 3
         versionName '1.2.0'
+        manifestPlaceholders = [deepLinkHost: deepLinkHost]
+        buildConfigField "String", "DEFAULT_HOME_URL", "\"${websiteUrl}\""
     }
 
     buildTypes {
