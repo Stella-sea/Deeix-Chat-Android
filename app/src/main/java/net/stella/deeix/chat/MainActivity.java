@@ -48,10 +48,10 @@ import java.util.Locale;
 import java.util.Set;
 
 public final class MainActivity extends Activity {
-    private static final String DEFAULT_HOME_URL = "https://chat.stella-wishing.xyz/";
     private static final String PREFS = "deeix_chat_preferences";
     private static final String PREF_SERVER_URL = "server_url";
     private static final String PREF_SERVER_URLS = "server_urls";
+    private static final String KEY_HANDLED_DEEP_LINK = "handled_deep_link";
     private static final int FILE_CHOOSER_REQUEST = 301;
     private static final int WEB_PERMISSION_REQUEST = 302;
     private static final int STORAGE_PERMISSION_REQUEST = 303;
@@ -76,6 +76,7 @@ public final class MainActivity extends Activity {
     private PermissionRequest pendingWebPermission;
     private PendingDownload pendingDownload;
     private String homeUrl;
+    private String handledDeepLink;
     private String recoveryUrl;
     private SharedPreferences preferences;
     private OnBackInvokedCallback backInvokedCallback;
@@ -98,8 +99,8 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        homeUrl = normalizeServerUrl(preferences.getString(PREF_SERVER_URL, DEFAULT_HOME_URL));
-        if (homeUrl == null) homeUrl = DEFAULT_HOME_URL;
+        homeUrl = normalizeServerUrl(preferences.getString(PREF_SERVER_URL, BuildConfig.DEFAULT_HOME_URL));
+        if (homeUrl == null) homeUrl = BuildConfig.DEFAULT_HOME_URL;
         configureWindow();
         createRoot();
         installWebView();
@@ -110,14 +111,29 @@ public final class MainActivity extends Activity {
                     OnBackInvokedDispatcher.PRIORITY_DEFAULT, backInvokedCallback);
         }
 
+        // A deep link can arrive together with a restored instance state (e.g. the
+        // process died while the activity was in the back stack). Only re-handle the
+        // launching intent when it carries a link we have not consumed yet; otherwise
+        // the restored WebView keeps the page the user was on.
+        Uri intentData = getIntent() == null ? null : getIntent().getData();
+        String intentDataString = intentData == null ? null : intentData.toString();
+        String consumedLink = savedInstanceState == null
+                ? null : savedInstanceState.getString(KEY_HANDLED_DEEP_LINK, null);
+        boolean freshDeepLink = intentDataString != null && !intentDataString.equals(consumedLink);
+
+        boolean restored = false;
         if (savedInstanceState != null) {
             try {
-                webView.restoreState(savedInstanceState);
+                restored = webView.restoreState(savedInstanceState) != null;
             } catch (RuntimeException ignored) {
-                loadInitialIntent();
+                restored = false;
             }
-        } else {
+        }
+        if (freshDeepLink || !restored || webView.getUrl() == null) {
             loadInitialIntent();
+            handledDeepLink = intentDataString;
+        } else {
+            handledDeepLink = consumedLink;
         }
     }
 
@@ -260,7 +276,7 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
-        settings.setUserAgentString(settings.getUserAgentString() + " DeeixChat/1.1.0");
+        settings.setUserAgentString(settings.getUserAgentString() + " DeeixChat/" + BuildConfig.VERSION_NAME);
         // Do not expose remote debugging in a production APK.
         WebView.setWebContentsDebuggingEnabled(false);
 
@@ -417,11 +433,20 @@ public final class MainActivity extends Activity {
     private boolean isTrustedHost(Uri uri) {
         if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return false;
         String host = uri.getHost();
-        Uri configured = Uri.parse(homeUrl == null ? DEFAULT_HOME_URL : homeUrl);
+        Uri configured = Uri.parse(homeUrl == null ? BuildConfig.DEFAULT_HOME_URL : homeUrl);
         String configuredHost = configured.getHost();
         return host != null && configuredHost != null
                 && configuredHost.equalsIgnoreCase(host)
-                && configured.getPort() == uri.getPort();
+                && effectivePort(configured) == effectivePort(uri);
+    }
+
+    private static int effectivePort(Uri uri) {
+        int port = uri.getPort();
+        if (port == -1) return -1;
+        // Treat an explicit default port the same as an omitted one.
+        if (port == 443 && "https".equalsIgnoreCase(uri.getScheme())) return -1;
+        if (port == 80 && "http".equalsIgnoreCase(uri.getScheme())) return -1;
+        return port;
     }
 
     private void enqueueDownload(PendingDownload download) {
@@ -715,6 +740,7 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         Uri data = intent == null ? null : intent.getData();
+        handledDeepLink = data == null ? null : data.toString();
         if (data != null && "deeixchat".equalsIgnoreCase(data.getScheme())
                 && "settings".equalsIgnoreCase(data.getHost())) {
             showServerDialog(false);
@@ -743,6 +769,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
+        outState.putString(KEY_HANDLED_DEEP_LINK, handledDeepLink);
         try {
             if (webView != null) webView.saveState(outState);
         } catch (RuntimeException ignored) {
