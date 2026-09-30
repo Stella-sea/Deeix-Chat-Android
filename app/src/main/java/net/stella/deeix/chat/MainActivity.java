@@ -19,11 +19,13 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
+import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
 import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
@@ -56,7 +58,6 @@ public final class MainActivity extends Activity {
     private static final int WEB_PERMISSION_REQUEST = 302;
     private static final int STORAGE_PERMISSION_REQUEST = 303;
     private static final int DARK_BLUE = Color.rgb(7, 12, 35);
-    private static final int SAFE_TOP_COLOR = Color.rgb(11, 18, 48);
 
     private FrameLayout root;
     private WebView webView;
@@ -67,6 +68,7 @@ public final class MainActivity extends Activity {
     private LinearLayout errorPanel;
     private View topInsetScrim;
     private int topInset;
+    private int chromeColor = DARK_BLUE;
     private float touchStartX;
     private float touchStartY;
     private boolean edgeSwipeCandidate;
@@ -220,10 +222,8 @@ public final class MainActivity extends Activity {
         root.addView(progressBar, progressParams);
 
         topInsetScrim = new View(this);
-        GradientDrawable scrim = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{SAFE_TOP_COLOR, DARK_BLUE});
-        topInsetScrim.setBackground(scrim);
+        // Solid fill; the actual color tracks the page's theme-color (see ThemeBridge).
+        topInsetScrim.setBackgroundColor(chromeColor);
         FrameLayout.LayoutParams scrimParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, 0, Gravity.TOP);
         root.addView(topInsetScrim, scrimParams);
@@ -260,6 +260,100 @@ public final class MainActivity extends Activity {
         errorPanel.setVisibility(View.GONE);
     }
 
+    /**
+     * Reports the page's {@code <meta name="theme-color">} to native code and keeps
+     * watching it, so the status-bar scrim follows the web theme even when the user
+     * switches themes inside the page without a reload.
+     */
+    private static final String THEME_OBSERVER_JS =
+            "(function(){"
+                    + "function deeixReadTheme(){var m=document.querySelector('meta[name=\"theme-color\"]');"
+                    + "return m?m.getAttribute('content'):null;}"
+                    + "function deeixReportTheme(){try{DeeixTheme.onThemeColor(deeixReadTheme());}catch(e){}}"
+                    + "if(window.__deeixThemeObserved)return;"
+                    + "window.__deeixThemeObserved=true;"
+                    + "deeixReportTheme();"
+                    + "new MutationObserver(function(muts){"
+                    + "for(var i=0;i<muts.length;i++){var mu=muts[i];"
+                    + "if(mu.type==='attributes'){var t=mu.target;"
+                    + "if(t&&t.getAttribute&&t.getAttribute('name')==='theme-color'){deeixReportTheme();return;}}"
+                    + "else if(mu.type==='childList'){"
+                    + "for(var j=0;j<mu.addedNodes.length;j++){var n=mu.addedNodes[j];"
+                    + "if(n.nodeType!==1)continue;"
+                    + "if(n.getAttribute('name')==='theme-color'){deeixReportTheme();return;}"
+                    + "if(n.querySelector&&n.querySelector('meta[name=\"theme-color\"]')){deeixReportTheme();return;}"
+                    + "}}}})"
+                    + ".observe(document.documentElement,"
+                    + "{subtree:true,childList:true,attributes:true,attributeFilter:['content']});"
+                    + "})();";
+
+    private final class ThemeBridge {
+        @JavascriptInterface
+        public void onThemeColor(String color) {
+            // JavascriptInterface callbacks arrive on a background thread.
+            runOnUiThread(() -> applyThemeColor(color));
+        }
+    }
+
+    private void applyThemeColor(String spec) {
+        int color = parseCssColor(spec, DARK_BLUE);
+        if (color == chromeColor) return;
+        chromeColor = color;
+        topInsetScrim.setBackgroundColor(color);
+        root.setBackgroundColor(color);
+        webView.setBackgroundColor(color);
+        setLightStatusBar(isLightColor(color));
+    }
+
+    private static int parseCssColor(String spec, int fallback) {
+        if (spec == null) return fallback;
+        String s = spec.trim().toLowerCase(Locale.US);
+        try {
+            if (s.startsWith("#")) {
+                String hex = s.substring(1);
+                if (hex.length() == 3) {
+                    hex = "" + hex.charAt(0) + hex.charAt(0)
+                            + hex.charAt(1) + hex.charAt(1)
+                            + hex.charAt(2) + hex.charAt(2);
+                }
+                if (hex.length() == 6) return 0xFF000000 | (int) Long.parseLong(hex, 16);
+                if (hex.length() == 8) return (int) Long.parseLong(hex, 16);
+            } else if (s.startsWith("rgb(") && s.endsWith(")")) {
+                String[] parts = s.substring(4, s.length() - 1).split(",");
+                if (parts.length >= 3) {
+                    return Color.rgb(Integer.parseInt(parts[0].trim()),
+                            Integer.parseInt(parts[1].trim()),
+                            Integer.parseInt(parts[2].trim()));
+                }
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        return fallback;
+    }
+
+    private static boolean isLightColor(int color) {
+        double r = Color.red(color) / 255.0;
+        double g = Color.green(color) / 255.0;
+        double b = Color.blue(color) / 255.0;
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5;
+    }
+
+    private void setLightStatusBar(boolean light) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                controller.setAppearanceLightStatusBars(
+                        light ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0);
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            View decor = getWindow().getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            if (light) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            decor.setSystemUiVisibility(flags);
+        }
+    }
+
     private void configureWebView() {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -277,6 +371,8 @@ public final class MainActivity extends Activity {
             settings.setSafeBrowsingEnabled(true);
         }
         settings.setUserAgentString(settings.getUserAgentString() + " DeeixChat/" + BuildConfig.VERSION_NAME);
+        // Lets the page report its theme-color so the native chrome can match it.
+        webView.addJavascriptInterface(new ThemeBridge(), "DeeixTheme");
         // Do not expose remote debugging in a production APK.
         WebView.setWebContentsDebuggingEnabled(false);
 
@@ -314,6 +410,7 @@ public final class MainActivity extends Activity {
                 super.onPageFinished(view, url);
                 CookieManager.getInstance().flush();
                 progressBar.setVisibility(View.GONE);
+                view.evaluateJavascript(THEME_OBSERVER_JS, null);
             }
 
             @Override
