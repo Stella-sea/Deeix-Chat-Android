@@ -342,7 +342,7 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
-                controller.setAppearance(
+                controller.setSystemBarsAppearance(
                         light ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0,
                         WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
             }
