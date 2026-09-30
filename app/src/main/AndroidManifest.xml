@@ -34,7 +34,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="chat.stella-wishing.xyz" />
+                    android:host="${deepLinkHost}" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
