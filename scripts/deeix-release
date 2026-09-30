@@ -47,9 +47,12 @@ case "$cmd" in
   check)
     require_file "$CONFIG_FILE"
     require_file "$ANDROID_GRADLE"
-    python3 - "$CONFIG_FILE" "$ANDROID_GRADLE" <<'PY'
+    manifest="$ROOT_DIR/app/src/main/AndroidManifest.xml"
+    require_file "$manifest"
+    python3 - "$CONFIG_FILE" "$ANDROID_GRADLE" "$manifest" <<'PY'
 import json, re, sys
-config_path, gradle_path = sys.argv[1:]
+from urllib.parse import urlsplit
+config_path, gradle_path, manifest_path = sys.argv[1:]
 with open(config_path, encoding='utf-8') as f:
     cfg = json.load(f)
 version = cfg['version']
@@ -67,6 +70,18 @@ if name.group(1) != version:
     raise SystemExit(f'Android versionName is {name.group(1)}, expected {version}')
 if vc.group(1) != code:
     raise SystemExit(f'Android versionCode is {vc.group(1)}, expected {code}')
+# The website host must stay a single source of truth: the manifest deep link
+# and the in-app default URL are derived from release-config.json at build time.
+host = urlsplit(cfg['website']).hostname or ''
+with open(manifest_path, encoding='utf-8') as f:
+    manifest = f.read()
+if '${deepLinkHost}' not in manifest:
+    raise SystemExit('AndroidManifest.xml must use ${deepLinkHost} for the deep link host')
+if f'android:host="{host}"' in manifest:
+    raise SystemExit('AndroidManifest.xml hardcodes the website host; use ${deepLinkHost}')
+for needle in ('release-config.json', 'deepLinkHost', 'DEFAULT_HOME_URL'):
+    if needle not in gradle:
+        raise SystemExit(f'app/build.gradle must wire {needle} from release-config.json')
 print(f'OK: {cfg["product"]} {version} ({tag})')
 PY
     ;;
