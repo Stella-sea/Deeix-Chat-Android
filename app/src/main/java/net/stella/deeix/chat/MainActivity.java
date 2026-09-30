@@ -230,30 +230,36 @@ public final class MainActivity extends Activity {
     }
 
     /**
-     * Reports the page's {@code <meta name="theme-color">} to native code and keeps
+     * Reports the page's actual rendered background color to native code and keeps
      * watching it, so the system bars follow the web theme even when the user
-     * switches themes inside the page without a reload.
+     * switches themes inside the page without a reload. Falls back to the
+     * theme-color meta tag when the computed background is transparent.
      */
     private static final String THEME_OBSERVER_JS =
             "(function(){"
-                    + "function deeixReadTheme(){var m=document.querySelector('meta[name=\"theme-color\"]');"
-                    + "return m?m.getAttribute('content'):null;}"
-                    + "function deeixReportTheme(){try{DeeixTheme.onThemeColor(deeixReadTheme());}catch(e){}}"
+                    + "function deeixIsTransparent(c){"
+                    + "return !c||c==='transparent'||c==='rgba(0, 0, 0, 0)';}"
+                    + "function deeixReadPageBg(){"
+                    + "var bg=null;"
+                    + "if(document.body){bg=getComputedStyle(document.body).backgroundColor;}"
+                    + "if(deeixIsTransparent(bg)){"
+                    + "bg=getComputedStyle(document.documentElement).backgroundColor;}"
+                    + "if(deeixIsTransparent(bg)){"
+                    + "var m=document.querySelector('meta[name=\"theme-color\"]');"
+                    + "bg=m?m.getAttribute('content'):null;}"
+                    + "return bg;}"
+                    + "function deeixReport(){try{DeeixTheme.onThemeColor(deeixReadPageBg());}catch(e){}}"
                     + "if(window.__deeixThemeObserved)return;"
                     + "window.__deeixThemeObserved=true;"
-                    + "deeixReportTheme();"
-                    + "new MutationObserver(function(muts){"
-                    + "for(var i=0;i<muts.length;i++){var mu=muts[i];"
-                    + "if(mu.type==='attributes'){var t=mu.target;"
-                    + "if(t&&t.getAttribute&&t.getAttribute('name')==='theme-color'){deeixReportTheme();return;}}"
-                    + "else if(mu.type==='childList'){"
-                    + "for(var j=0;j<mu.addedNodes.length;j++){var n=mu.addedNodes[j];"
-                    + "if(n.nodeType!==1)continue;"
-                    + "if(n.getAttribute('name')==='theme-color'){deeixReportTheme();return;}"
-                    + "if(n.querySelector&&n.querySelector('meta[name=\"theme-color\"]')){deeixReportTheme();return;}"
-                    + "}}}})"
+                    + "var deeixTimer=null;"
+                    + "function deeixSchedule(){"
+                    + "if(deeixTimer)clearTimeout(deeixTimer);"
+                    + "deeixTimer=setTimeout(function(){deeixTimer=null;deeixReport();},250);}"
+                    + "deeixSchedule();"
+                    + "new MutationObserver(deeixSchedule)"
                     + ".observe(document.documentElement,"
-                    + "{subtree:true,childList:true,attributes:true,attributeFilter:['content']});"
+                    + "{subtree:true,childList:true,attributes:true,"
+                    + "attributeFilter:['class','style','content']});"
                     + "})();";
 
     private final class ThemeBridge {
@@ -267,6 +273,7 @@ public final class MainActivity extends Activity {
     private void applyThemeColor(String spec) {
         int color = parseCssColor(spec, DARK_BLUE);
         if (color == chromeColor) return;
+        if (Color.alpha(color) < 128) return; // ignore transparent reports
         chromeColor = color;
         getWindow().setStatusBarColor(color);
         getWindow().setNavigationBarColor(color);
@@ -292,6 +299,21 @@ public final class MainActivity extends Activity {
                 String[] parts = s.substring(4, s.length() - 1).split(",");
                 if (parts.length >= 3) {
                     return Color.rgb(Integer.parseInt(parts[0].trim()),
+                            Integer.parseInt(parts[1].trim()),
+                            Integer.parseInt(parts[2].trim()));
+                }
+            } else if (s.startsWith("rgba(") && s.endsWith(")")) {
+                String[] parts = s.substring(5, s.length() - 1).split(",");
+                if (parts.length >= 3) {
+                    int a = 255;
+                    if (parts.length >= 4) {
+                        try {
+                            a = Math.round(Float.parseFloat(parts[3].trim()) * 255);
+                        } catch (NumberFormatException ignored) {
+                        }
+                    }
+                    return Color.argb(a,
+                            Integer.parseInt(parts[0].trim()),
                             Integer.parseInt(parts[1].trim()),
                             Integer.parseInt(parts[2].trim()));
                 }
